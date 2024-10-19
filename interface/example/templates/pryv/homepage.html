@@ -1,0 +1,694 @@
+{% load static %}
+<html>
+<head>
+    <link rel="stylesheet" type="text/css" href="{% static 'pryv/styles.css' %}">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pryv</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/lottie-web/5.7.14/lottie.min.js"></script>
+    <link rel="shortcut icon" type="image/x-icon" href="{% static 'favicon.ico' %}">
+</head>
+<body>
+    <div class="top-bar">
+        <div class="logo">
+            <img src="{% static 'pryv/logo.png' %}" alt="Logo">
+        </div>
+        <div class="context-switch">
+            <label for="contextToggle">Context Switching</label>
+            <label class="switch">
+                <input type="checkbox" id="contextToggle">
+                <span class="slider"></span>
+            </label>
+        </div>
+    </div>
+
+    <div class="chat-wrapper">
+        <div class="chat-window" id="chatWindow">
+            <!-- Chat messages will be appended here -->
+        </div>
+        
+        <div class="chat-input-container">
+            <select id="model-inline">
+                <option value="llama" selected>LLaMA</option>
+                <option value="gpt-4">GPT-4</option>
+                <option value="gpt-4-turbo-2024-04-09">GPT-4 Turbo</option>
+                <option value="gpt-4o">GPT-4o</option>
+                <option value="claude-3-opus">Claude 3 Opus</option>
+                <option value="claude-3-5-sonnet">Claude 3.5 Sonnet</option>
+            </select>
+            <button id="micButton" class="mic-button" title="Speech recognition">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                    <path class="mic-icon" d="M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/>
+                </svg>
+            </button>
+            <input type="text" id="queryInput" placeholder="Send a message.">
+            <button id="sendButton" class="send-button" onclick="sendQuery()">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                    <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                </svg>
+            </button>
+        </div>
+        
+        <div class="chat-footer">
+            Built with ❤️ by Pryv
+        </div>
+    </div>
+
+    <script>
+        let currentQuery = '';
+        let currentResponse = '';
+        let chatContext = [];
+        let responseCards = [];
+        let currentCardIndex = 0;
+        let currentEditIndex = -1;
+        let isEditing = false;
+
+        let recognition;
+        let recognitionTimeout;
+
+        function initializeSpeechRecognition() {
+            if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                recognition = new SpeechRecognition();
+                recognition.continuous = true;
+                recognition.interimResults = true;
+                recognition.lang = 'en-US';
+
+                recognition.onstart = function() {
+                    console.log('Speech recognition started');
+                    updateMicrophoneState(true);
+                };
+
+                recognition.onresult = function(event) {
+                    const transcript = Array.from(event.results)
+                        .map(result => result[0].transcript)
+                        .join('');
+                    document.getElementById('queryInput').value = transcript;
+                    
+                    // Reset the timeout on each result
+                    clearTimeout(recognitionTimeout);
+                    recognitionTimeout = setTimeout(() => {
+                        stopSpeechRecognition();
+                        sendQuery();
+                    }, 4000);
+                };
+
+                recognition.onerror = function(event) {
+                    console.log('Speech recognition error:', event.error);
+                    stopSpeechRecognition();
+                };
+
+                recognition.onend = function() {
+                    console.log('Speech recognition ended');
+                    updateMicrophoneState(false);
+                };
+            }
+        }
+
+        function startSpeechRecognition() {
+            if (recognition) {
+                recognition.start();
+                updateMicrophoneState(true);
+                recognitionTimeout = setTimeout(() => {
+                    stopSpeechRecognition();
+                    sendQuery();
+                }, 4000);
+            }
+        }
+
+        function stopSpeechRecognition() {
+            if (recognition) {
+                recognition.stop();
+                updateMicrophoneState(false);
+                clearTimeout(recognitionTimeout);
+            }
+        }
+
+        function updateMicrophoneState(isListening) {
+            const micButton = document.getElementById('micButton');
+            if (isListening) {
+                micButton.classList.add('listening');
+                micButton.title = 'Stop listening';
+            } else {
+                micButton.classList.remove('listening');
+                micButton.title = 'Start speech recognition';
+            }
+        }
+
+        function sendQuery(regenerate = false, edit = false) {
+            const query = edit ? currentQuery : (regenerate ? currentQuery : document.getElementById('queryInput').value);
+            const model = document.getElementById('model-inline').value;
+            const contextEnabled = document.getElementById('contextToggle').checked;
+            const sendButton = document.getElementById('sendButton');
+
+            console.log('Sending query:', query);
+            console.log('Selected model:', model);
+            console.log('Context enabled:', contextEnabled);
+
+            if (query.trim() === '') return;
+
+            currentQuery = query;
+            currentResponse = '';
+
+            const chatWindow = document.getElementById('chatWindow');
+            let botMessageDiv;
+
+            if (!regenerate && !edit) {
+                // New query from input bar
+                botMessageDiv = document.createElement('div');
+                botMessageDiv.className = 'response-card-container';
+                chatWindow.appendChild(botMessageDiv);
+                responseCards.push({
+                    query: query,
+                    response: '',
+                    edits: []
+                });
+                currentCardIndex = responseCards.length - 1;
+                currentEditIndex = -1;
+            } else {
+                // Edit or regeneration
+                botMessageDiv = document.querySelector('.response-card-container:last-child');
+                if (!botMessageDiv) {
+                    botMessageDiv = document.createElement('div');
+                    botMessageDiv.className = 'response-card-container';
+                    chatWindow.appendChild(botMessageDiv);
+                }
+                responseCards[currentCardIndex].edits.push({
+                    query: query,
+                    response: ''
+                });
+                currentEditIndex = responseCards[currentCardIndex].edits.length - 1;
+            }
+            showLoadingIcon(botMessageDiv);
+
+            sendButton.disabled = true;
+            sendButton.classList.add('disabled');
+
+            if (!regenerate && !edit) {
+                document.getElementById('queryInput').value = '';
+            }
+            chatWindow.scrollTop = chatWindow.scrollHeight;
+
+            const contextToSend = contextEnabled ? chatContext : [];
+            const eventSource = new EventSource(`/stream_query/?query=${encodeURIComponent(query)}&model=${encodeURIComponent(model)}&context=${encodeURIComponent(JSON.stringify(contextToSend))}&is_edit=${edit}`);
+
+            let responseText = '';
+
+            eventSource.onmessage = function(event) {
+                console.log('Raw event data:', event.data);  // Log raw data
+                if (event.data === '[DONE]') {
+                    eventSource.close();
+                    sendButton.disabled = false;
+                    sendButton.classList.remove('disabled');
+                    currentResponse = responseText;
+                    
+                    // Update chat context
+                    if (!edit && !regenerate) {
+                        chatContext.push({"role": "user", "content": query});
+                        chatContext.push({"role": "assistant", "content": responseText});
+                        
+                        // Limit context to last 20 messages
+                        if (chatContext.length > 20) {
+                            chatContext = chatContext.slice(-20);
+                        }
+                    }
+
+                    // Update response card
+                    if (!regenerate && !edit) {
+                        responseCards[currentCardIndex].response = responseText;
+                    } else {
+                        responseCards[currentCardIndex].edits[currentEditIndex].response = responseText;
+                    }
+                    updateResponseCard(botMessageDiv, responseText, model, query);
+                    updateNavButtons();
+                } else {
+                    try {
+                        const data = JSON.parse(event.data);
+                        if (data.type === 'text') {
+                            responseText += data.content;
+                            updateStreamingResponse(botMessageDiv, responseText, model, query, edit);
+                        } else if (data.type === 'error') {
+                            console.error('Error from server:', data.content);
+                            botMessageDiv.innerHTML = `Error: ${data.content}`;
+                            eventSource.close();
+                            sendButton.disabled = false;
+                            sendButton.classList.remove('disabled');
+                        }
+                    } catch (error) {
+                        console.error('Error parsing event data:', error);
+                        console.error('Problematic data:', event.data);
+                        // Instead of showing an error, we'll just log it and continue
+                        // This allows us to handle cases where individual tokens might not be valid JSON
+                        console.warn('Skipping invalid JSON data');
+                    }
+                    chatWindow.scrollTop = chatWindow.scrollHeight;
+                }
+            };
+
+            eventSource.onerror = function(error) {
+                console.error('EventSource error:', error);
+                eventSource.close();
+                botMessageDiv.innerHTML = 'Error: Connection closed. Please try again.';
+                chatWindow.scrollTop = chatWindow.scrollHeight;
+                sendButton.disabled = false;
+                sendButton.classList.remove('disabled');
+            };
+        }
+
+        function updateStreamingResponse(container, responseText, model, query, isEdit) {
+            container.innerHTML = `
+                <div class="response-card">
+                    <div class="query-content">${query}</div>
+                    <div class="response-content">${model}: ${responseText}</div>
+                    <div class="response-actions">
+                        <div class="nav-buttons">
+                            <button class="nav-btn prev" onclick="navigateEdits(-1)" disabled>
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <polyline points="15 18 9 12 15 6"></polyline>
+                                </svg>
+                            </button>
+                            <span class="edit-counter">0/0</span>
+                            <button class="nav-btn next" onclick="navigateEdits(1)" disabled>
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <polyline points="9 18 15 12 9 6"></polyline>
+                                </svg>
+                            </button>
+                        </div>
+                        <button class="action-btn edit-btn" onclick="enableEdit(this.closest('.response-card').querySelector('.query-content'))" title="Edit query">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                            </svg>
+                        </button>
+                        <button class="action-btn copy-btn" onclick="copyToClipboard(this.closest('.response-card').querySelector('.response-content').textContent)" title="Copy response">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
+                                <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
+                            </svg>
+                        </button>
+                        <button class="action-btn regenerate-btn" onclick="sendQuery(true)" title="Regenerate">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+
+        function updateResponseCard(container, responseText, model, query) {
+            const currentCard = responseCards[currentCardIndex];
+            const totalEdits = currentCard.edits.length;
+            const isEdit = currentEditIndex !== -1;
+
+            container.innerHTML = `
+                <div class="response-card">
+                    <div class="query-content" onclick="enableEdit(this)">${query}</div>
+                    <div class="response-content">${model}: ${responseText}</div>
+                    <div class="response-actions">
+                        <div class="nav-buttons">
+                            <button class="nav-btn prev" onclick="navigateEdits(-1)" ${isEdit || totalEdits > 0 ? '' : 'disabled'}>
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <polyline points="15 18 9 12 15 6"></polyline>
+                                </svg>
+                            </button>
+                            <span class="edit-counter">${isEdit ? currentEditIndex + 1 : 0}/${totalEdits}</span>
+                            <button class="nav-btn next" onclick="navigateEdits(1)" ${currentEditIndex < totalEdits - 1 ? '' : 'disabled'}>
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <polyline points="9 18 15 12 9 6"></polyline>
+                                </svg>
+                            </button>
+                        </div>
+                        <button class="action-btn edit-btn" onclick="enableEdit(this.closest('.response-card').querySelector('.query-content'))" title="Edit query">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                            </svg>
+                        </button>
+                        <button class="action-btn copy-btn" onclick="copyToClipboard(this.closest('.response-card').querySelector('.response-content').textContent)" title="Copy response">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
+                                <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
+                            </svg>
+                        </button>
+                        <button class="action-btn regenerate-btn" onclick="sendQuery(true)" title="Regenerate">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+
+        function enableEdit(element) {
+            if (isEditing) return;
+            isEditing = true;
+            const currentText = element.textContent;
+            element.innerHTML = `
+                <textarea class="edit-query-input">${currentText}</textarea>
+                <div class="edit-actions">
+                    <button class="action-btn save-btn" onclick="submitEdit(this.closest('.query-content'))">Save</button>
+                    <button class="action-btn cancel-btn" onclick="cancelEdit(this.closest('.query-content'))">Cancel</button>
+                </div>
+            `;
+            const textarea = element.querySelector('.edit-query-input');
+            textarea.focus();
+            setupKeyboardShortcuts(textarea);
+        }
+
+        function submitEdit(element) {
+            const editedQuery = element.querySelector('.edit-query-input').value;
+            currentQuery = editedQuery;
+            element.innerHTML = editedQuery;
+            isEditing = false;
+            sendQuery(false, true);
+        }
+
+        function cancelEdit(element) {
+            element.innerHTML = currentQuery;
+            isEditing = false;
+        }
+
+        function showLoadingIcon(container) {
+            container.innerHTML = '<div id="lottie-container" style="width: 50px; height: 50px;"></div>';
+            lottie.loadAnimation({
+                container: document.getElementById('lottie-container'),
+                renderer: 'svg',
+                loop: true,
+                autoplay: true,
+                path: '{% static "pryv/loading-animation.json" %}'  // Make sure to add this Lottie JSON file to your static files
+            });
+        }
+
+        function setupKeyboardShortcuts(inputElement) {
+            inputElement.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    if (inputElement.id === 'queryInput') {
+                        sendQuery();
+                    } else {
+                        submitEdit(inputElement.closest('.query-content'));
+                    }
+                } else if (e.key === 'Enter' && e.shiftKey) {
+                    e.preventDefault();
+                    const cursorPosition = inputElement.selectionStart;
+                    const textBeforeCursor = inputElement.value.substring(0, cursorPosition);
+                    const textAfterCursor = inputElement.value.substring(cursorPosition);
+                    
+                    if (e.metaKey && inputElement.id === 'queryInput') {
+                        // For cmd+shift+enter in the main input, move cursor to new line
+                        inputElement.value = textBeforeCursor + '\n' + textAfterCursor;
+                        inputElement.selectionStart = inputElement.selectionEnd = cursorPosition + 1;
+                    } else {
+                        // For shift+enter, or in edit mode, send the query
+                        if (inputElement.id === 'queryInput') {
+                            sendQuery();
+                        } else {
+                            submitEdit(inputElement.closest('.query-content'));
+                        }
+                    }
+                }
+            });
+        }
+
+        // Set up keyboard shortcuts for the main input
+        document.addEventListener('DOMContentLoaded', function() {
+            const mainInput = document.getElementById('queryInput');
+            setupKeyboardShortcuts(mainInput);
+        });
+
+        document.getElementById('contextToggle').addEventListener('change', function() {
+            console.log('Context switching:', this.checked ? 'enabled' : 'disabled');
+        });
+
+        document.getElementById('queryInput').addEventListener('keypress', function (e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                sendQuery();
+            }
+        });
+
+        // Add this to your existing JavaScript
+        let mediaRecorder;
+        let audioChunks = [];
+
+        function startSpeechRecognition() {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                alert("Your browser doesn't support microphone access. Please try using Chrome or Edge.");
+                return;
+            }
+
+            navigator.mediaDevices.getUserMedia({ audio: true })
+                .then(function(stream) {
+                    console.log('Microphone permission granted');
+                    
+                    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+                        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                        const recognition = new SpeechRecognition();
+                        recognition.continuous = false;
+                        recognition.interimResults = false;
+                        recognition.lang = 'en-US';
+
+                        recognition.onstart = function() {
+                            console.log('Speech recognition started');
+                            updateMicrophoneState(true);
+                        };
+
+                        recognition.onresult = function(event) {
+                            console.log('Speech recognition result received');
+                            const transcript = event.results[0][0].transcript;
+                            document.getElementById('queryInput').value = transcript;
+                        };
+
+                        recognition.onerror = function(event) {
+                            console.log('Speech recognition error:', event.error);
+                            logError('Speech recognition error:', event);
+                            if (event.error === 'network') {
+                                console.log('Falling back to audio recording');
+                                startAudioRecording(stream);
+                            } else {
+                                resetMicrophoneState();
+                                document.getElementById('queryInput').value = `Error occurred: ${event.error}. Please try again.`;
+                            }
+                        };
+
+                        recognition.onend = function() {
+                            console.log('Speech recognition ended');
+                            resetMicrophoneState();
+                        };
+
+                        recognition.start();
+                    } else {
+                        console.log('SpeechRecognition not available, using audio recording');
+                        startAudioRecording(stream);
+                    }
+                })
+                .catch(function(err) {
+                    console.log('Microphone permission denied');
+                    logError('Error accessing microphone:', err);
+                    document.getElementById('queryInput').value = 'Error accessing microphone. Please check your browser settings and try again.';
+                });
+        }
+
+        function startAudioRecording(stream) {
+            console.log('Starting audio recording');
+            updateMicrophoneState(true);
+            mediaRecorder = new MediaRecorder(stream);
+            audioChunks = [];
+
+            mediaRecorder.ondataavailable = (event) => {
+                console.log('Audio data available');
+                audioChunks.push(event.data);
+            };
+
+            mediaRecorder.onstop = () => {
+                console.log('Audio recording stopped');
+                const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                sendAudioToServer(audioBlob);
+            };
+
+            mediaRecorder.start();
+            console.log('Audio recording started');
+            setTimeout(() => {
+                console.log('Stopping audio recording');
+                mediaRecorder.stop();
+            }, 5000); // Record for 5 seconds
+        }
+
+        function sendAudioToServer(audioBlob) {
+            console.log('Sending audio to server');
+            const formData = new FormData();
+            formData.append('audio', audioBlob, 'recording.wav');
+
+            fetch('/process-audio/', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => {
+                console.log('Server response received', response);
+                return response.json();
+            })
+            .then(data => {
+                console.log('Audio processing result:', data);
+                document.getElementById('queryInput').value = data.transcript;
+            })
+            .catch(error => {
+                console.error('Error sending/processing audio:', error);
+                document.getElementById('queryInput').value = 'Error processing audio. Please try again.';
+            })
+            .finally(() => {
+                resetMicrophoneState();
+            });
+        }
+
+        function updateMicrophoneState(isListening) {
+            const micButton = document.getElementById('micButton');
+            if (isListening) {
+                micButton.classList.add('listening');
+                micButton.title = 'Stop listening';
+            } else {
+                micButton.classList.remove('listening');
+                micButton.title = 'Start speech recognition';
+            }
+        }
+
+        function resetMicrophoneState() {
+            updateMicrophoneState(false);
+        }
+
+        function logError(message, error) {
+            console.error(message, error);
+            console.log('Navigator online status:', navigator.onLine);
+            console.log('Current URL protocol:', window.location.protocol);
+            console.log('User Agent:', navigator.userAgent);
+            console.log('Brave detected:', navigator.brave !== undefined);
+            console.log('Available speech recognition:', 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window);
+            
+            if (navigator.connection) {
+                console.log('Network information:', JSON.stringify({
+                    effectiveType: navigator.connection.effectiveType,
+                    downlink: navigator.connection.downlink,
+                    rtt: navigator.connection.rtt,
+                    saveData: navigator.connection.saveData
+                }));
+            } else {
+                console.log('Network Information API not available');
+            }
+            
+            console.log('Page load performance:', JSON.stringify({
+                type: performance.navigation.type,
+                redirectCount: performance.navigation.redirectCount,
+                loadTime: performance.timing.loadEventEnd - performance.timing.navigationStart
+            }));
+
+            // Perform a network check
+            fetch('https://www.google.com', { mode: 'no-cors' })
+                .then(() => console.log('Network check: Connected'))
+                .catch(() => console.log('Network check: Failed'));
+        }
+
+        // Add this to detect Brave and show instructions
+        // if (navigator.brave !== undefined) {
+        //     alert("It looks like you're using Brave. If speech recognition doesn't work, you may need to adjust your shield settings or switch to a different browser for this feature.");
+        // }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeSpeechRecognition();
+            
+            const micButton = document.getElementById('micButton');
+            
+            if (navigator.brave !== undefined) {
+                micButton.disabled = true;
+                micButton.title = "Speech recognition is not available in Brave due to privacy settings.";
+                micButton.style.opacity = "0.5";
+            } else {
+                micButton.onclick = function() {
+                    if (recognition && recognition.state === 'active') {
+                        stopSpeechRecognition();
+                    } else {
+                        startSpeechRecognition();
+                    }
+                };
+            }
+        });
+
+        function navigateEdits(direction) {
+            const currentCard = responseCards[currentCardIndex];
+            currentEditIndex += direction;
+            
+            if (currentEditIndex < -1) currentEditIndex = -1;
+            if (currentEditIndex >= currentCard.edits.length) currentEditIndex = currentCard.edits.length - 1;
+
+            const query = currentEditIndex === -1 ? currentCard.query : currentCard.edits[currentEditIndex].query;
+            const response = currentEditIndex === -1 ? currentCard.response : currentCard.edits[currentEditIndex].response;
+            const model = document.getElementById('model-inline').value;
+
+            const container = document.querySelector('.response-card-container:last-child');
+            updateResponseCard(container, response, model, query);
+        }
+
+        function updateNavButtons() {
+            const prevBtn = document.querySelector('.nav-btn.prev');
+            const nextBtn = document.querySelector('.nav-btn.next');
+            const editCounter = document.querySelector('.edit-counter');
+            
+            const currentCard = responseCards[currentCardIndex];
+            const totalEdits = currentCard.edits.length;
+            
+            prevBtn.disabled = currentEditIndex === -1;
+            nextBtn.disabled = currentEditIndex === totalEdits - 1;
+            
+            editCounter.textContent = `${currentEditIndex + 1}/${totalEdits}`;
+        }
+<<<<<<< HEAD
+
+        // Add this function to test the backend connection
+        function testBackendConnection() {
+            const testConnectionBtn = document.getElementById('testConnectionBtn');
+            testConnectionBtn.disabled = true;
+            testConnectionBtn.textContent = 'Testing...';
+
+            // Log the request details
+            console.log('Sending request to test connection');
+            console.log('Request method: GET');
+            console.log('Request headers: ', {
+                'Content-Type': 'application/json',
+                // Add any other headers you're sending
+            });
+
+            fetch(`${SERVER_URL}/test-connection/`)
+                .then(response => {
+                    console.log('Response status:', response.status);
+                    console.log('Response headers:', response.headers);
+                    return response.json();
+                })
+                .then(data => {
+                    console.log('Response data:', data);
+                    if (data.status === 'success') {
+                        alert('Successfully connected to the backend!');
+                    } else {
+                        alert('Failed to connect to the backend. Error: ' + data.message);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error testing connection:', error);
+                    alert('Error testing connection. Please check the console for details.');
+                })
+                .finally(() => {
+                    testConnectionBtn.disabled = false;
+                    testConnectionBtn.textContent = 'Test Backend Connection';
+                });
+        }
+
+        // Add this to your existing DOMContentLoaded event listener
+        document.addEventListener('DOMContentLoaded', function() {
+            // ... existing code ...
+
+            const testConnectionBtn = document.getElementById('testConnectionBtn');
+            testConnectionBtn.addEventListener('click', testBackendConnection);
+        });
+=======
+>>>>>>> 99221cdb0920a4d0d056207f56efbb7e419f935e
+    </script>
+</body>
+</html>
