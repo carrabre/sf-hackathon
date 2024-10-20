@@ -12,12 +12,17 @@
         <div class="logo">
             <img src="{% static 'pryv/logo.png' %}" alt="Logo">
         </div>
-        <div class="context-switch">
-            <label for="contextToggle">Context Switching</label>
-            <label class="switch">
-                <input type="checkbox" id="contextToggle">
-                <span class="slider"></span>
-            </label>
+        <div class="top-bar-right">
+            <div class="context-switch">
+                <label for="contextToggle">Context Switching</label>
+                <label class="switch">
+                    <input type="checkbox" id="contextToggle">
+                    <span class="slider"></span>
+                </label>
+            </div>
+            <div class="purchase-subscription">
+                <a href="https://pay.boomfi.xyz/2lzWDtJhuAHEohV90QbNDEHCk2L" target="_blank" class="purchase-btn">Purchase Subscription</a>
+            </div>
         </div>
     </div>
 
@@ -28,12 +33,12 @@
         
         <div class="chat-input-container">
             <select id="model-inline">
-                <option value="llama" selected>LLaMA</option>
                 <option value="gpt-4">GPT-4</option>
                 <option value="gpt-4-turbo-2024-04-09">GPT-4 Turbo</option>
-                <option value="gpt-4o">GPT-4o</option>
+                <option value="gpt-4o" selected>GPT-4o</option>
                 <option value="claude-3-opus">Claude 3 Opus</option>
                 <option value="claude-3-5-sonnet">Claude 3.5 Sonnet</option>
+                <option value="llama">LLaMA</option>
             </select>
             <button id="micButton" class="mic-button" title="Speech recognition">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
@@ -640,55 +645,11 @@
             
             editCounter.textContent = `${currentEditIndex + 1}/${totalEdits}`;
         }
-<<<<<<< HEAD
 
-        // Add this function to test the backend connection
-        function testBackendConnection() {
-            const testConnectionBtn = document.getElementById('testConnectionBtn');
-            testConnectionBtn.disabled = true;
-            testConnectionBtn.textContent = 'Testing...';
-
-            // Log the request details
-            console.log('Sending request to test connection');
-            console.log('Request method: GET');
-            console.log('Request headers: ', {
-                'Content-Type': 'application/json',
-                // Add any other headers you're sending
-            });
-
-            fetch(`${SERVER_URL}/test-connection/`)
-                .then(response => {
-                    console.log('Response status:', response.status);
-                    console.log('Response headers:', response.headers);
-                    return response.json();
-                })
-                .then(data => {
-                    console.log('Response data:', data);
-                    if (data.status === 'success') {
-                        alert('Successfully connected to the backend!');
-                    } else {
-                        alert('Failed to connect to the backend. Error: ' + data.message);
-                    }
-                })
-                .catch(error => {
-                    console.error('Error testing connection:', error);
-                    alert('Error testing connection. Please check the console for details.');
-                })
-                .finally(() => {
-                    testConnectionBtn.disabled = false;
-                    testConnectionBtn.textContent = 'Test Backend Connection';
-                });
-        }
-
-        // Add this to your existing DOMContentLoaded event listener
-        document.addEventListener('DOMContentLoaded', function() {
-            // ... existing code ...
-
-            const testConnectionBtn = document.getElementById('testConnectionBtn');
-            testConnectionBtn.addEventListener('click', testBackendConnection);
+        const sendButton = document.getElementById('sendButton');
+        sendButton.addEventListener('click', function() {
+            sendQuery();
         });
-=======
->>>>>>> 99221cdb0920a4d0d056207f56efbb7e419f935e
     </script>
 </body>
 </html>
